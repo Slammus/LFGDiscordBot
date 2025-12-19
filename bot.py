@@ -3,7 +3,7 @@ import discord
 from discord import app_commands
 from discord.ui import Button, View
 from dotenv import load_dotenv
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional
 
 # Load environment variables
 load_dotenv()
@@ -22,7 +22,7 @@ class GameSession:
         self.creator_id = creator_id
         self.channel_id = channel_id
         self.games: Dict[str, Dict] = {}  # game_name: {min_players, max_players, players: set}
-        self.message_id: int = None
+        self.message_id: Optional[int] = None
         self.notified_games: Set[str] = set()  # Track which games have been notified
     
     def add_game(self, game_name: str, min_players: int, max_players: int) -> bool:
@@ -175,8 +175,8 @@ class AddGameModal(discord.ui.Modal, title="Add a New Game"):
             return
         
         try:
-            min_p = int(str(self.min_players))
-            max_p = int(str(self.max_players))
+            min_p = int(self.min_players.value)
+            max_p = int(self.max_players.value)
             
             if min_p < 1 or max_p < min_p:
                 await interaction.response.send_message(
@@ -185,7 +185,7 @@ class AddGameModal(discord.ui.Modal, title="Add a New Game"):
                 )
                 return
             
-            game_name = str(self.game_name)
+            game_name = self.game_name.value
             if session.add_game(game_name, min_p, max_p):
                 await interaction.response.send_message(
                     f"Added **{game_name}** to the session!",
