@@ -10,7 +10,7 @@ load_dotenv()
 
 # Bot setup
 intents = discord.Intents.default()
-intents.message_content = True
+intents.guilds = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
@@ -25,7 +25,7 @@ class GameSession:
         self.message_id: Optional[int] = None
         self.notified_games: Set[str] = set()  # Track which games have been notified
     
-    def add_game(self, game_name: str, min_players: int, max_players: int) -> bool:
+    def add_game(self, game_name: str, min_players: Optional[int], max_players: Optional[int]) -> bool:
         """Add a game to the session."""
         if game_name in self.games:
             return False
@@ -42,7 +42,7 @@ class GameSession:
             return False
         
         game = self.games[game_name]
-        if len(game['players']) >= game['max_players']:
+        if game['max_players'] is not None and len(game['players']) >= game['max_players']:
             return False
         
         game['players'].add(user_id)
@@ -63,7 +63,7 @@ class GameSession:
         """Get list of games that have reached minimum players."""
         ready = []
         for game_name, game in self.games.items():
-            if len(game['players']) >= game['min_players'] and game_name not in self.notified_games:
+            if game['min_players'] is not None and len(game['players']) >= game['min_players'] and game_name not in self.notified_games:
                 ready.append(game_name)
         return ready
     
@@ -105,7 +105,7 @@ class GameButton(Button):
                 await interaction.response.send_message(f"You joined {self.game_name}!", ephemeral=True)
                 
                 # Check if minimum players reached
-                if len(game['players']) >= game['min_players'] and self.game_name not in self.session.notified_games:
+                if game['min_players'] is not None and len(game['players']) >= game['min_players'] and self.game_name not in self.session.notified_games:
                     self.session.mark_notified(self.game_name)
                     channel = client.get_channel(self.session.channel_id)
                     if channel:
@@ -150,16 +150,16 @@ class AddGameModal(discord.ui.Modal, title="Add a New Game"):
     )
     
     min_players = discord.ui.TextInput(
-        label="Minimum Players",
-        placeholder="Minimum number of players (e.g., 2)",
-        required=True,
+        label="Minimum Players (Optional)",
+        placeholder="Leave blank for no minimum",
+        required=False,
         max_length=3
     )
     
     max_players = discord.ui.TextInput(
-        label="Maximum Players",
-        placeholder="Maximum number of players (e.g., 4)",
-        required=True,
+        label="Maximum Players (Optional)",
+        placeholder="Leave blank for no maximum",
+        required=False,
         max_length=3
     )
     
@@ -175,12 +175,28 @@ class AddGameModal(discord.ui.Modal, title="Add a New Game"):
             return
         
         try:
-            min_p = int(self.min_players.value)
-            max_p = int(self.max_players.value)
+            # Parse min and max players (None if empty)
+            min_p = int(self.min_players.value) if self.min_players.value.strip() else None
+            max_p = int(self.max_players.value) if self.max_players.value.strip() else None
             
-            if min_p < 1 or max_p < min_p:
+            # Validate player counts
+            if min_p is not None and min_p < 1:
                 await interaction.response.send_message(
-                    "Invalid player counts! Minimum must be at least 1 and maximum must be >= minimum.",
+                    "Invalid minimum player count! Must be at least 1.",
+                    ephemeral=True
+                )
+                return
+            
+            if max_p is not None and max_p < 1:
+                await interaction.response.send_message(
+                    "Invalid maximum player count! Must be at least 1.",
+                    ephemeral=True
+                )
+                return
+            
+            if min_p is not None and max_p is not None and max_p < min_p:
+                await interaction.response.send_message(
+                    "Invalid player counts! Maximum must be >= minimum.",
                     ephemeral=True
                 )
                 return
@@ -244,10 +260,24 @@ def create_session_embed(session: GameSession) -> discord.Embed:
             players_list = [f"<@{pid}>" for pid in game['players']]
             players_text = ', '.join(players_list) if players_list else "No players yet"
             
-            status = "✅ Ready!" if len(game['players']) >= game['min_players'] else "⏳ Waiting"
+            # Build player count display
+            if game['min_players'] is None and game['max_players'] is None:
+                player_count = f"({len(game['players'])} players)"
+                status = ""
+            elif game['min_players'] is None:
+                player_count = f"({len(game['players'])}/{game['max_players']})"
+                status = ""
+            elif game['max_players'] is None:
+                player_count = f"({len(game['players'])}/{game['min_players']}+)"
+                status = "✅ Ready!" if len(game['players']) >= game['min_players'] else "⏳ Waiting"
+            else:
+                player_count = f"({len(game['players'])}/{game['min_players']}-{game['max_players']})"
+                status = "✅ Ready!" if len(game['players']) >= game['min_players'] else "⏳ Waiting"
+            
+            name = f"{game_name} {player_count} {status}".strip()
             
             embed.add_field(
-                name=f"{game_name} ({len(game['players'])}/{game['min_players']}-{game['max_players']}) {status}",
+                name=name,
                 value=players_text,
                 inline=False
             )
@@ -265,14 +295,14 @@ async def update_session_message(message: discord.Message, session: GameSession)
 @tree.command(name="lfg", description="Start a looking-for-group session")
 @app_commands.describe(
     game="Name of the first game (optional)",
-    min_players="Minimum number of players (default: 2)",
-    max_players="Maximum number of players (default: 4)"
+    min_players="Minimum number of players (optional)",
+    max_players="Maximum number of players (optional)"
 )
 async def lfg_command(
     interaction: discord.Interaction,
     game: str = None,
-    min_players: int = 2,
-    max_players: int = 4
+    min_players: int = None,
+    max_players: int = None
 ):
     """Start a new LFG session."""
     channel_id = interaction.channel_id
@@ -286,9 +316,23 @@ async def lfg_command(
         return
     
     # Validate player counts
-    if min_players < 1 or max_players < min_players:
+    if min_players is not None and min_players < 1:
         await interaction.response.send_message(
-            "Invalid player counts! Minimum must be at least 1 and maximum must be >= minimum.",
+            "Invalid minimum player count! Must be at least 1.",
+            ephemeral=True
+        )
+        return
+    
+    if max_players is not None and max_players < 1:
+        await interaction.response.send_message(
+            "Invalid maximum player count! Must be at least 1.",
+            ephemeral=True
+        )
+        return
+    
+    if min_players is not None and max_players is not None and max_players < min_players:
+        await interaction.response.send_message(
+            "Invalid player counts! Maximum must be >= minimum.",
             ephemeral=True
         )
         return
@@ -335,6 +379,17 @@ async def endlfg_command(interaction: discord.Interaction):
         )
         return
     
+    # Delete the session message if it exists
+    if session.message_id:
+        try:
+            channel = interaction.channel
+            message = await channel.fetch_message(session.message_id)
+            await message.delete()
+        except discord.NotFound:
+            pass  # Message was already deleted
+        except discord.Forbidden:
+            pass  # Bot doesn't have permission to delete
+    
     # Remove the session
     del active_sessions[channel_id]
     
@@ -344,7 +399,11 @@ async def endlfg_command(interaction: discord.Interaction):
 @client.event
 async def on_ready():
     """Called when the bot is ready."""
-    await tree.sync()
+    try:
+        synced = await tree.sync()
+        print(f"Synced {len(synced)} command(s)")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
     print(f"Bot is ready! Logged in as {client.user}")
     print(f"Bot ID: {client.user.id}")
 
