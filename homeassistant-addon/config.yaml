@@ -1,0 +1,16 @@
+name: "LFG Discord Bot"
+version: "1.0.7"
+slug: "lfg_discord_bot"
+description: "Looking for Group Discord Bot for gaming sessions"
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+startup: application
+boot: auto
+options:
+  discord_token: ""
+schema:
+  discord_token: str

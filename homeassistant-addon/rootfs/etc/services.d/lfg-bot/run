@@ -1,0 +1,33 @@
+#!/bin/sh
+set -e
+
+echo "[INFO] LFG Discord Bot service starting..."
+
+CONFIG_PATH=/data/options.json
+
+if [ ! -f "$CONFIG_PATH" ]; then
+    echo "[ERROR] Configuration file not found at $CONFIG_PATH"
+    exit 1
+fi
+
+echo "[INFO] Reading configuration from $CONFIG_PATH"
+
+# Get Discord token from add-on configuration
+DISCORD_TOKEN=$(jq --raw-output '.discord_token // empty' $CONFIG_PATH)
+
+if [ -z "$DISCORD_TOKEN" ]; then
+    echo "[ERROR] Discord token not configured!"
+    exit 1
+fi
+
+echo "[INFO] Discord token loaded successfully"
+
+# Export token as environment variable
+export DISCORD_TOKEN
+
+echo "[INFO] Starting LFG Discord Bot..."
+
+# Run the bot
+cd /app || exit 1
+echo "[INFO] Executing Python bot..."
+exec python3 -u bot.py

@@ -410,27 +410,10 @@ async def on_ready():
 
 def main():
     """Main entry point."""
-    # Try to load from add-on config first, then fall back to .env
-    token = None
-    
-    # Check for Home Assistant add-on config
-    if os.path.exists('/data/options.json'):
-        import json
-        try:
-            with open('/data/options.json', 'r') as f:
-                config = json.load(f)
-                token = config.get('discord_token')
-                print("Loaded token from Home Assistant add-on configuration")
-        except Exception as e:
-            print(f"Error reading add-on config: {e}")
-    
-    # Fall back to environment variable
+    token = os.getenv('DISCORD_TOKEN')
     if not token:
-        token = os.getenv('DISCORD_TOKEN')
-    
-    if not token:
-        print("Error: DISCORD_TOKEN not found in environment variables or add-on config!")
-        print("Please create a .env file with your bot token or configure the add-on.")
+        print("Error: DISCORD_TOKEN not found in environment variables!")
+        print("Please create a .env file with your bot token.")
         return
     
     client.run(token)
