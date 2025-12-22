@@ -343,6 +343,9 @@ async def lfg_command(
     # Add initial game if provided
     if game:
         session.add_game(game, min_players, max_players)
+    else:
+        # If no game specified, add "Any Game" option
+        session.add_game("Any Game", None, None)
     
     active_sessions[channel_id] = session
     
@@ -410,10 +413,27 @@ async def on_ready():
 
 def main():
     """Main entry point."""
-    token = os.getenv('DISCORD_TOKEN')
+    # Try to load from add-on config first, then fall back to .env
+    token = None
+    
+    # Check for Home Assistant add-on config
+    if os.path.exists('/data/options.json'):
+        import json
+        try:
+            with open('/data/options.json', 'r') as f:
+                config = json.load(f)
+                token = config.get('discord_token')
+                print("Loaded token from Home Assistant add-on configuration")
+        except Exception as e:
+            print(f"Error reading add-on config: {e}")
+    
+    # Fall back to environment variable
     if not token:
-        print("Error: DISCORD_TOKEN not found in environment variables!")
-        print("Please create a .env file with your bot token.")
+        token = os.getenv('DISCORD_TOKEN')
+    
+    if not token:
+        print("Error: DISCORD_TOKEN not found in environment variables or add-on config!")
+        print("Please create a .env file with your bot token or configure the add-on.")
         return
     
     client.run(token)

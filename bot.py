@@ -343,6 +343,9 @@ async def lfg_command(
     # Add initial game if provided
     if game:
         session.add_game(game, min_players, max_players)
+    else:
+        # If no game specified, add "Any Game" option
+        session.add_game("Any Game", None, None)
     
     active_sessions[channel_id] = session
     
