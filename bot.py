@@ -76,6 +76,43 @@ class GameSession:
 active_sessions: Dict[int, GameSession] = {}
 
 
+class LeaveGameButton(Button):
+    """Button for leaving a game from the join confirmation message."""
+    
+    def __init__(self, game_name: str, session: GameSession):
+        super().__init__(
+            label=f"Leave {game_name}",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"leave_confirm_{game_name}"
+        )
+        self.game_name = game_name
+        self.session = session
+    
+    async def callback(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        
+        if self.session.leave_game(self.game_name, user_id):
+            await interaction.response.edit_message(
+                content=f"You left {self.game_name}!",
+                view=None
+            )
+            
+            # Update the main session message
+            if self.session.message_id:
+                channel = client.get_channel(self.session.channel_id)
+                if channel:
+                    try:
+                        message = await channel.fetch_message(self.session.message_id)
+                        await update_session_message(message, self.session)
+                    except discord.NotFound:
+                        pass
+        else:
+            await interaction.response.edit_message(
+                content=f"Could not leave {self.game_name}.",
+                view=None
+            )
+
+
 class GameButton(Button):
     """Button for joining/leaving a game."""
     
@@ -102,7 +139,15 @@ class GameButton(Button):
             await interaction.response.send_message(f"You left {self.game_name}!", ephemeral=True)
         else:
             if self.session.join_game(self.game_name, user_id):
-                await interaction.response.send_message(f"You joined {self.game_name}!", ephemeral=True)
+                # Create a view with a leave button
+                leave_view = View(timeout=None)
+                leave_view.add_item(LeaveGameButton(self.game_name, self.session))
+                
+                await interaction.response.send_message(
+                    f"You joined {self.game_name}!",
+                    view=leave_view,
+                    ephemeral=True
+                )
                 
                 # Check if minimum players reached
                 if game['min_players'] is not None and len(game['players']) >= game['min_players'] and self.game_name not in self.session.notified_games:
