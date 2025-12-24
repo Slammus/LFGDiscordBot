@@ -72,13 +72,12 @@ class GameSession:
         self.notified_games.add(game_name)
 
 
-# Store active sessions (channel_id: GameSession)
+ # Store active sessions (message_id: GameSession)
 active_sessions: Dict[int, GameSession] = {}
 
 
 class LeaveGameButton(Button):
     """Button for leaving a game from the join confirmation message."""
-    
     def __init__(self, game_name: str, session: GameSession):
         super().__init__(
             label=f"Leave {game_name}",
@@ -87,16 +86,13 @@ class LeaveGameButton(Button):
         )
         self.game_name = game_name
         self.session = session
-    
     async def callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
-        
         if self.session.leave_game(self.game_name, user_id):
             await interaction.response.edit_message(
                 content=f"You left {self.game_name}!",
                 view=None
             )
-            
             # Update the main session message
             if self.session.message_id:
                 channel = client.get_channel(self.session.channel_id)
@@ -128,11 +124,9 @@ class GameButton(Button):
     async def callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         game = self.session.games.get(self.game_name)
-        
         if not game:
             await interaction.response.send_message("This game no longer exists!", ephemeral=True)
             return
-        
         # Toggle join/leave
         if user_id in game['players']:
             self.session.leave_game(self.game_name, user_id)
@@ -142,13 +136,11 @@ class GameButton(Button):
                 # Create a view with a leave button
                 leave_view = View(timeout=None)
                 leave_view.add_item(LeaveGameButton(self.game_name, self.session))
-                
                 await interaction.response.send_message(
                     f"You joined {self.game_name}!",
                     view=leave_view,
                     ephemeral=True
                 )
-                
                 # Check if minimum players reached
                 if game['min_players'] is not None and len(game['players']) >= game['min_players'] and self.game_name not in self.session.notified_games:
                     self.session.mark_notified(self.game_name)
@@ -162,10 +154,9 @@ class GameButton(Button):
                         )
             else:
                 await interaction.response.send_message(
-                    f"Cannot join {self.game_name} - game is full!", 
+                    f"Cannot join {self.game_name} - game is full!",
                     ephemeral=True
                 )
-        
         # Update the message
         await update_session_message(interaction.message, self.session)
 
@@ -209,12 +200,13 @@ class AddGameModal(discord.ui.Modal, title="Add a New Game"):
     )
     
     async def on_submit(self, interaction: discord.Interaction):
-        channel_id = interaction.channel_id
-        session = active_sessions.get(channel_id)
+        # Find session by the message_id that the button was on
+        message_id = interaction.message.id if interaction.message else None
+        session = active_sessions.get(message_id)
         
         if not session:
             await interaction.response.send_message(
-                "No active session in this channel! Use /lfg to start one.",
+                "This session no longer exists!",
                 ephemeral=True
             )
             return
@@ -254,14 +246,11 @@ class AddGameModal(discord.ui.Modal, title="Add a New Game"):
                 )
                 
                 # Update the session message
-                if session.message_id:
-                    channel = client.get_channel(channel_id)
-                    if channel:
-                        try:
-                            message = await channel.fetch_message(session.message_id)
-                            await update_session_message(message, session)
-                        except discord.NotFound:
-                            pass
+                if interaction.message:
+                    try:
+                        await update_session_message(interaction.message, session)
+                    except discord.NotFound:
+                        pass
             else:
                 await interaction.response.send_message(
                     f"**{game_name}** is already in the session!",
@@ -352,14 +341,6 @@ async def lfg_command(
     """Start a new LFG session."""
     channel_id = interaction.channel_id
     
-    # Check if there's already an active session
-    if channel_id in active_sessions:
-        await interaction.response.send_message(
-            "There's already an active LFG session in this channel!",
-            ephemeral=True
-        )
-        return
-    
     # Validate player counts
     if min_players is not None and min_players < 1:
         await interaction.response.send_message(
@@ -392,56 +373,59 @@ async def lfg_command(
         # If no game specified, add "Any Game" option
         session.add_game("Any Game", None, None)
     
-    active_sessions[channel_id] = session
-    
     # Create and send the session message
     embed = create_session_embed(session)
     view = create_session_view(session)
     
     await interaction.response.send_message(embed=embed, view=view)
     
-    # Store the message ID
+    # Store the message ID and add session to active_sessions
     message = await interaction.original_response()
     session.message_id = message.id
+    active_sessions[message.id] = session
 
 
-@tree.command(name="endlfg", description="End the current looking-for-group session")
+@tree.command(name="endlfg", description="End your looking-for-group session(s)")
 async def endlfg_command(interaction: discord.Interaction):
-    """End the LFG session in the current channel."""
+    """End the user's LFG session(s) in the current channel."""
     channel_id = interaction.channel_id
+    user_id = interaction.user.id
     
-    if channel_id not in active_sessions:
+    # Find all sessions in this channel created by this user (or if they have manage permissions)
+    user_sessions = []
+    for msg_id, session in list(active_sessions.items()):
+        if session.channel_id == channel_id:
+            if session.creator_id == user_id or interaction.user.guild_permissions.manage_messages:
+                user_sessions.append((msg_id, session))
+    
+    if not user_sessions:
         await interaction.response.send_message(
-            "There's no active LFG session in this channel!",
+            "You don't have any active LFG sessions in this channel!",
             ephemeral=True
         )
         return
     
-    session = active_sessions[channel_id]
-    
-    # Only the creator or someone with manage messages permission can end the session
-    if interaction.user.id != session.creator_id and not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message(
-            "Only the session creator or users with 'Manage Messages' permission can end the session!",
-            ephemeral=True
-        )
-        return
-    
-    # Delete the session message if it exists
-    if session.message_id:
+    # End all user's sessions in this channel
+    ended_count = 0
+    for msg_id, session in user_sessions:
+        # Delete the session message if it exists
         try:
             channel = interaction.channel
             message = await channel.fetch_message(session.message_id)
             await message.delete()
+            ended_count += 1
         except discord.NotFound:
             pass  # Message was already deleted
         except discord.Forbidden:
             pass  # Bot doesn't have permission to delete
+        
+        # Remove the session
+        del active_sessions[msg_id]
     
-    # Remove the session
-    del active_sessions[channel_id]
-    
-    await interaction.response.send_message("LFG session ended!", ephemeral=True)
+    if ended_count == 1:
+        await interaction.response.send_message("LFG session ended!", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"{ended_count} LFG sessions ended!", ephemeral=True)
 
 
 @client.event
